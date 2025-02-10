@@ -75,11 +75,12 @@ def get_answer():
 
     # Search Firestore for similar questions
     existing_answer, confidence = search_firestore(question)
+    
     if existing_answer:
         return jsonify({
             "answer": existing_answer,
             "source": "database",
-            "confidence": confidence
+            "confidence": confidence  # Confidence % from Firestore match
         })
 
     # No match found, generate a new response
@@ -88,9 +89,10 @@ def get_answer():
     return jsonify({
         "answer": new_answer,
         "source": "AI-generated",
-        "confidence": confidence,  # Confidence remains low if no match
+        "confidence": 0,  # Confidence of 0 = Not found in Firestore
         "note": "This answer is AI-generated and not stored in the database."
     })
+
 
 
 @app.route("/confirm_answer", methods=["POST"])
