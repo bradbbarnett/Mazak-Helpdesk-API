@@ -1,4 +1,6 @@
-flask
+numpy
+scipy
 firebase-admin
 openai
+flask
 gunicorn
