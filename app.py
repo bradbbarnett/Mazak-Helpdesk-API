@@ -22,7 +22,6 @@ client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # Embedding Model
 EMBEDDING_MODEL = "text-embedding-ada-002"
 
-
 def get_embedding(text):
     """Generate an embedding for a given text using OpenAI API."""
     response = client.embeddings.create(
@@ -31,29 +30,32 @@ def get_embedding(text):
     )
     return response.data[0].embedding
 
-
 def search_firestore(question):
-    """Search Firestore for similar questions using embeddings."""
-    query_embedding = get_embedding(question)
-    best_match = None
-    best_score = 0.0  # Cosine similarity (1.0 = perfect match)
+    """Search Firestore for relevant facts based on keywords and embeddings."""
+    
+    # Extract keywords (can later improve with NLP)
+    keywords = question.lower().split()  # Simple keyword extraction
 
-    docs = db.collection("qa_archive").stream()
+    # Try direct match in Firestore
+    docs = db.collection("fact_database").stream()
+    best_fact = None
+    best_match_score = 0
+
     for doc in docs:
         data = doc.to_dict()
-        stored_embedding = data.get("embedding")
+        fact_keywords = data.get("keywords", [])
 
-        if stored_embedding:
-            similarity = 1 - cosine(query_embedding, stored_embedding)
-            if similarity > best_score:  # Find the highest similarity
-                best_score = similarity
-                best_match = data
+        # Count how many keywords match
+        match_score = sum(1 for word in keywords if word in fact_keywords)
 
-    if best_match and best_score >= 0.85:  # Confidence threshold
-        return best_match["answer"], best_score * 100  # Convert to percentage
+        if match_score > best_match_score:
+            best_match_score = match_score
+            best_fact = data.get("fact")
 
-    return None, best_score * 100
+    if best_fact and best_match_score > 0:  # Ensure some relevance
+        return best_fact, min(100, best_match_score * 20)  # Scale confidence
 
+    return None, 0
 
 def generate_answer(question):
     """Use OpenAI to generate an email response."""
@@ -63,25 +65,35 @@ def generate_answer(question):
     )
     return response.choices[0].message.content
 
-
 @app.route("/get_answer", methods=["POST"])
 def get_answer():
-    """API Endpoint for retrieving or generating answers."""
+    """Retrieve answers from facts or generate an AI response."""
     data = request.json
     question = data.get("question")
 
     if not question:
         return jsonify({"error": "No question provided"}), 400
 
-    # Search Firestore for similar questions
-    existing_answer, confidence = search_firestore(question)
-    
-    if existing_answer:
+    # First try to find a relevant fact
+    existing_fact, confidence = search_firestore(question)
+
+    if existing_fact:
         return jsonify({
-            "answer": existing_answer,
-            "source": "database",
-            "confidence": confidence  # Confidence % from Firestore match
+            "answer": f"Dear Customer,\n\n{existing_fact}\n\nBest regards,\nYour Support Team",
+            "source": "Fact-based database",
+            "confidence": confidence
         })
+
+    # No fact found, generate AI-based response
+    new_answer = generate_answer(question)
+
+    return jsonify({
+        "answer": f"Dear Customer,\n\n{new_answer}\n\nBest regards,\nYour Support Team",
+        "source": "AI-generated",
+        "confidence": 0,
+        "note": "This answer is AI-generated and not stored in the database."
+    })
+
 
     # No match found, generate a new response
     new_answer = generate_answer(question)
@@ -93,28 +105,24 @@ def get_answer():
         "note": "This answer is AI-generated and not stored in the database."
     })
 
-
-
 @app.route("/confirm_answer", methods=["POST"])
 def confirm_answer():
-    """API endpoint to confirm and store a correct answer in Firestore."""
+    """Store a verified fact in the Firestore database."""
     data = request.json
-    question = data.get("question")
-    answer = data.get("answer")
+    fact = data.get("fact")
+    category = data.get("category", "General")
+    keywords = data.get("keywords", [])
 
-    if not question or not answer:
-        return jsonify({"error": "Question and answer required"}), 400
+    if not fact or not keywords:
+        return jsonify({"error": "Fact and keywords are required"}), 400
 
-    embedding = get_embedding(question)  # Store embedding for future searches
-
-    db.collection("qa_archive").add({
-        "question": question,
-        "answer": answer,
-        "embedding": embedding
+    db.collection("fact_database").add({
+        "category": category,
+        "keywords": keywords,
+        "fact": fact
     })
 
-    return jsonify({"message": "Answer confirmed and stored in Firestore."})
-
+    return jsonify({"message": "Fact stored successfully."})
 
 if __name__ == "__main__":
     app.run(port=5000, debug=True)
