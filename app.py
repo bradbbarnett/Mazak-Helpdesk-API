@@ -75,19 +75,18 @@ def search_faq(query):
     """Search for the best-matching fact using vector similarity."""
     query_embedding = get_embedding(query)
 
-    # Search for closest matches
+    # 🔹 Search for the closest matches
     results = index.query(vector=query_embedding, top_k=3, include_metadata=True)
 
     if results["matches"]:
         best_match = results["matches"][0]
         similarity = best_match["score"]
 
-        if similarity > 0.85:  # High-confidence threshold
-            return best_match["metadata"]["answer"], similarity
-        else:
-            return None, similarity  # Not confident enough
+        if "fact" in best_match["metadata"]:  
+            return best_match["metadata"]["fact"], similarity
 
     return None, 0  # No match found
+
 
 def generate_answer(question):
     """Use OpenAI to generate an AI response."""
