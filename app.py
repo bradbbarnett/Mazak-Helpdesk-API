@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import firebase_admin
 from firebase_admin import credentials, firestore
 import openai
-import pinecone
+from pinecone import Pinecone, ServerlessSpec
 import os
 import json
 
@@ -19,8 +19,19 @@ app = Flask(__name__)
 client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # 🔹 Initialize Pinecone
-pinecone.init(api_key=os.getenv("PINECONE_API_KEY"), environment=os.getenv("PINECONE_ENVIRONMENT"))
-index = pinecone.Index(os.getenv("PINECONE_INDEX_NAME"))
+pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
+
+# Check if the index exists, create if necessary
+if 'my_index' not in pc.list_indexes().names():
+    pc.create_index(
+        name='my_index',
+        dimension=1536,  # Adjust based on your embedding size
+        metric='euclidean',
+        spec=ServerlessSpec(cloud='aws', region='us-west-2')
+    )
+
+# Connect to the index
+index = pc.Index("my_index")
 
 # 🔹 Embedding Model
 EMBEDDING_MODEL = "text-embedding-ada-002"
