@@ -4,3 +4,4 @@ firebase-admin
 openai
 flask
 gunicorn
+pinecone-client

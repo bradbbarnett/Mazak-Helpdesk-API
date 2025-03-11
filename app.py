@@ -2,24 +2,27 @@ from flask import Flask, request, jsonify
 import firebase_admin
 from firebase_admin import credentials, firestore
 import openai
+import pinecone
 import os
 import json
-import numpy as np
-from scipy.spatial.distance import cosine
 
-# Initialize Firestore with Service Account Key
+# 🔹 Initialize Firestore with Service Account Key
 firebase_creds = json.loads(os.getenv("FIREBASE_CREDENTIALS"))
 cred = credentials.Certificate(firebase_creds)
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# Initialize Flask app
+# 🔹 Initialize Flask app
 app = Flask(__name__)
 
-# Set OpenAI API Key
+# 🔹 Set OpenAI API Key
 client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Embedding Model
+# 🔹 Initialize Pinecone
+pinecone.init(api_key=os.getenv("PINECONE_API_KEY"), environment=os.getenv("PINECONE_ENVIRONMENT"))
+index = pinecone.Index(os.getenv("PINECONE_INDEX_NAME"))
+
+# 🔹 Embedding Model
 EMBEDDING_MODEL = "text-embedding-ada-002"
 
 def get_embedding(text):
@@ -30,35 +33,46 @@ def get_embedding(text):
     )
     return response.data[0].embedding
 
-def search_firestore(question):
-    """Search Firestore for relevant facts based on keywords and embeddings."""
-    
-    # Extract keywords (can later improve with NLP)
-    keywords = question.lower().split()  # Simple keyword extraction
-
-    # Try direct match in Firestore
-    docs = db.collection("fact_database").stream()
-    best_fact = None
-    best_match_score = 0
-
+def store_embeddings():
+    """Generate and store embeddings for existing Firestore questions."""
+    docs = db.collection("fact_database").stream()  # Ensure using the correct collection
     for doc in docs:
         data = doc.to_dict()
-        fact_keywords = data.get("keywords", [])
+        question = data.get("question")
+        answer = data.get("fact")  # Ensure it's using the correct field
 
-        # Count how many keywords match
-        match_score = sum(1 for word in keywords if word in fact_keywords)
+        if not question or not answer:
+            continue  # Skip invalid data
 
-        if match_score > best_match_score:
-            best_match_score = match_score
-            best_fact = data.get("fact")
+        embedding = get_embedding(question)
 
-    if best_fact and best_match_score > 0:  # Ensure some relevance
-        return best_fact, min(100, best_match_score * 20)  # Scale confidence
+        # Store in Pinecone
+        index.upsert([
+            (doc.id, embedding, {"question": question, "answer": answer})
+        ])
+    
+    print("✅ All embeddings stored in Pinecone!")
 
-    return None, 0
+def search_faq(query):
+    """Search for the best-matching fact using vector similarity."""
+    query_embedding = get_embedding(query)
+
+    # Search for closest matches
+    results = index.query(vector=query_embedding, top_k=3, include_metadata=True)
+
+    if results["matches"]:
+        best_match = results["matches"][0]
+        similarity = best_match["score"]
+
+        if similarity > 0.85:  # High-confidence threshold
+            return best_match["metadata"]["answer"], similarity
+        else:
+            return None, similarity  # Not confident enough
+
+    return None, 0  # No match found
 
 def generate_answer(question):
-    """Use OpenAI to generate an email response."""
+    """Use OpenAI to generate an AI response."""
     response = client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": f"Write a professional email response: {question}"}]
@@ -67,24 +81,24 @@ def generate_answer(question):
 
 @app.route("/get_answer", methods=["POST"])
 def get_answer():
-    """Retrieve answers from facts or generate an AI response."""
+    """Retrieve answers from vector search or generate an AI response."""
     data = request.json
     question = data.get("question")
 
     if not question:
         return jsonify({"error": "No question provided"}), 400
 
-    # First try to find a relevant fact
-    existing_fact, confidence = search_firestore(question)
+    # 🔹 First, search the vector database (Pinecone)
+    existing_fact, confidence = search_faq(question)
 
     if existing_fact:
         return jsonify({
             "answer": f"Dear Customer,\n\n{existing_fact}\n\nBest regards,\nYour Support Team",
             "source": "Fact-based database",
-            "confidence": confidence
+            "confidence": round(confidence, 2)  # Confidence score rounded
         })
 
-    # No fact found, generate AI-based response
+    # 🔹 If no fact found, generate AI-based response
     new_answer = generate_answer(question)
 
     return jsonify({
@@ -94,33 +108,27 @@ def get_answer():
         "note": "This answer is AI-generated and not stored in the database."
     })
 
-
-    # No match found, generate a new response
-    new_answer = generate_answer(question)
-
-    return jsonify({
-        "answer": new_answer,
-        "source": "AI-generated",
-        "confidence": 0,  # Confidence of 0 = Not found in Firestore
-        "note": "This answer is AI-generated and not stored in the database."
-    })
-
 @app.route("/confirm_answer", methods=["POST"])
 def confirm_answer():
-    """Store a verified fact in the Firestore database."""
+    """Store a verified fact in Firestore and Pinecone."""
     data = request.json
+    question = data.get("question")
     fact = data.get("fact")
     category = data.get("category", "General")
-    keywords = data.get("keywords", [])
 
-    if not fact or not keywords:
-        return jsonify({"error": "Fact and keywords are required"}), 400
+    if not question or not fact:
+        return jsonify({"error": "Both question and fact are required"}), 400
 
-    db.collection("fact_database").add({
+    # 🔹 Save in Firestore
+    doc_ref = db.collection("fact_database").add({
         "category": category,
-        "keywords": keywords,
+        "question": question,
         "fact": fact
     })
+
+    # 🔹 Save in Pinecone
+    embedding = get_embedding(question)
+    index.upsert([(doc_ref[1].id, embedding, {"question": question, "answer": fact})])
 
     return jsonify({"message": "Fact stored successfully."})
 
