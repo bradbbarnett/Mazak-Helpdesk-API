@@ -19,19 +19,25 @@ app = Flask(__name__)
 client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # 🔹 Initialize Pinecone
-pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
-# Check if the index exists, create if necessary
-if 'my_index' not in pc.list_indexes().names():
+# Get Pinecone index name and ensure it's lowercase
+index_name = os.getenv("PINECONE_INDEX_NAME", "").lower()
+
+# Ensure the index exists, create if necessary
+if index_name not in pc.list_indexes().names():
     pc.create_index(
-        name='my_index',
+        name=index_name,
         dimension=1536,  # Adjust based on your embedding size
-        metric='euclidean',
-        spec=ServerlessSpec(cloud='aws', region='us-west-2')
+        metric="euclidean",
+        spec=ServerlessSpec(
+            cloud="aws",  # Update based on your Pinecone setup
+            region=os.getenv("PINECONE_ENVIRONMENT")  # Uses your environment variable
+        )
     )
 
 # Connect to the index
-index = pc.Index("my_index")
+index = pc.Index(index_name)
 
 # 🔹 Embedding Model
 EMBEDDING_MODEL = "text-embedding-ada-002"
