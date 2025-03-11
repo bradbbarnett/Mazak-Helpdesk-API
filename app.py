@@ -5,6 +5,7 @@ import openai
 from pinecone import Pinecone, ServerlessSpec
 import os
 import json
+import logging
 
 # 🔹 Initialize Firestore with Service Account Key
 firebase_creds = json.loads(os.getenv("FIREBASE_CREDENTIALS"))
@@ -95,6 +96,8 @@ def generate_answer(question):
         messages=[{"role": "user", "content": f"Write a professional email response: {question}"}]
     )
     return response.choices[0].message.content
+    
+    logging.basicConfig(level=logging.DEBUG)
 
 @app.route("/get_answer", methods=["POST"])
 def get_answer():
