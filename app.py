@@ -132,25 +132,24 @@ def get_answer():
 def confirm_answer():
     """Store a verified fact in Firestore and Pinecone."""
     data = request.json
-    question = data.get("question")
     fact = data.get("fact")
     category = data.get("category", "General")
 
-    if not question or not fact:
-        return jsonify({"error": "Both question and fact are required"}), 400
+    if not fact:
+        return jsonify({"error": "Fact is required to store an entry."}), 400
 
     # 🔹 Save in Firestore
     doc_ref = db.collection("fact_database").add({
         "category": category,
-        "question": question,
         "fact": fact
     })
 
-    # 🔹 Save in Pinecone
-    embedding = get_embedding(question)
-    index.upsert([(doc_ref[1].id, embedding, {"question": question, "answer": fact})])
+    # 🔹 Generate embedding & store in Pinecone
+    embedding = get_embedding(fact)
+    index.upsert([(doc_ref[1].id, embedding, {"fact": fact, "category": category})])
 
     return jsonify({"message": "Fact stored successfully."})
+
 
 if __name__ == "__main__":
     app.run(port=5000, debug=True)
